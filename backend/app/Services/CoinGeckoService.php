@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Client\RequestException;
 use Exception;
 
@@ -45,76 +46,85 @@ class CoinGeckoService
      * Fetch top 10 cryptocurrencies by market cap
      *
      * Returns the top 10 cryptocurrencies ordered by market capitalization.
+     * Results are cached for 2 minutes to avoid hitting CoinGecko rate limits.
      *
      * @return array Array of cryptocurrency data
      * @throws Exception If the API request fails
      */
     public function getTopCryptos(): array
     {
-        try {
-            $response = Http::timeout($this->timeout)
-                ->retry(3, 100)
-                ->get("{$this->baseUrl}/coins/markets", [
-                    'vs_currency' => 'usd',
-                    'order' => 'market_cap_desc',
-                    'per_page' => 10,
-                    'page' => 1,
-                    'sparkline' => false,
-                ]);
+        return Cache::remember('crypto:top-10', 120, function () {
+            try {
+                $response = Http::timeout($this->timeout)
+                    ->retry(3, 100)
+                    ->get("{$this->baseUrl}/coins/markets", [
+                        'vs_currency' => 'usd',
+                        'order' => 'market_cap_desc',
+                        'per_page' => 10,
+                        'page' => 1,
+                        'sparkline' => false,
+                    ]);
 
-            if ($response->notFound()) {
-                throw new Exception('CoinGecko API endpoint not found', 404);
+                if ($response->notFound()) {
+                    throw new Exception('CoinGecko API endpoint not found', 404);
+                }
+
+                if ($response->failed()) {
+                    throw new Exception(
+                        'Failed to fetch cryptocurrencies from CoinGecko: ' . $response->status(),
+                        $response->status()
+                    );
+                }
+
+                return $response->json() ?? [];
+            } catch (RequestException $e) {
+                report($e);
+                throw new Exception('Network error while fetching cryptocurrencies: ' . $e->getMessage(), 503);
             }
-
-            if ($response->failed()) {
-                throw new Exception(
-                    'Failed to fetch cryptocurrencies from CoinGecko: ' . $response->status(),
-                    $response->status()
-                );
-            }
-
-            return $response->json() ?? [];
-        } catch (RequestException $e) {
-            report($e);
-            throw new Exception('Network error while fetching cryptocurrencies: ' . $e->getMessage(), 503);
-        }
+        });
     }
 
     /**
      * Fetch detailed data of a cryptocurrency by ID
      *
-     * @throws Exception
+     * Results are cached for 5 minutes to avoid hitting CoinGecko rate limits.
+     *
+     * @param string $id The cryptocurrency ID
+     * @return array Array of cryptocurrency data
+     * @throws Exception If the API request fails
      */
     public function getCryptoById(string $id): array
     {
-        try {
-            $response = Http::timeout($this->timeout)
-                ->retry(3, 100)
-                ->get("{$this->baseUrl}/coins/{$id}", [
-                    'localization' => false,
-                    'tickers' => false,
-                    'market_data' => true,
-                    'community_data' => false,
-                    'developer_data' => false,
-                    'sparkline' => false,
-                ]);
+        return Cache::remember("crypto:detail:{$id}", 300, function () use ($id) {
+            try {
+                $response = Http::timeout($this->timeout)
+                    ->retry(3, 100)
+                    ->get("{$this->baseUrl}/coins/{$id}", [
+                        'localization' => false,
+                        'tickers' => false,
+                        'market_data' => true,
+                        'community_data' => false,
+                        'developer_data' => false,
+                        'sparkline' => false,
+                    ]);
 
-            if ($response->notFound()) {
-                throw new Exception("Cryptocurrency '{$id}' not found", 404);
+                if ($response->notFound()) {
+                    throw new Exception("Cryptocurrency '{$id}' not found", 404);
+                }
+
+                if ($response->failed()) {
+                    throw new Exception(
+                        "Failed to fetch crypto details for '{$id}': " . $response->status(),
+                        $response->status()
+                    );
+                }
+
+                return $response->json() ?? [];
+            } catch (RequestException $e) {
+                report($e);
+                throw new Exception("Network error while fetching crypto '{$id}': " . $e->getMessage(), 503);
             }
-
-            if ($response->failed()) {
-                throw new Exception(
-                    "Failed to fetch crypto details for '{$id}': " . $response->status(),
-                    $response->status()
-                );
-            }
-
-            return $response->json() ?? [];
-        } catch (RequestException $e) {
-            report($e);
-            throw new Exception("Network error while fetching crypto '{$id}': " . $e->getMessage(), 503);
-        }
+        });
     }
 
     /**
@@ -122,6 +132,7 @@ class CoinGeckoService
      *
      * Searches the CoinGecko API for cryptocurrencies matching the query.
      * Returns a list of matching coins with basic information.
+     * Results are cached for 10 minutes to avoid hitting CoinGecko rate limits.
      *
      * @param string $query The search term (name or symbol)
      * @return array Array of matching cryptocurrencies
@@ -132,33 +143,37 @@ class CoinGeckoService
      */
     public function searchCrypto(string $query): array
     {
-        try {
-            // Use CoinGecko's search endpoint
-            $response = Http::timeout($this->timeout)
-                ->retry(3, 100)
-                ->get("{$this->baseUrl}/search", [
-                    'query' => $query,
-                ]);
+        $cacheKey = 'crypto:search:' . md5(strtolower($query));
 
-            if ($response->notFound()) {
-                throw new Exception('CoinGecko search endpoint not found', 404);
+        return Cache::remember($cacheKey, 600, function () use ($query) {
+            try {
+                // Use CoinGecko's search endpoint
+                $response = Http::timeout($this->timeout)
+                    ->retry(3, 100)
+                    ->get("{$this->baseUrl}/search", [
+                        'query' => $query,
+                    ]);
+
+                if ($response->notFound()) {
+                    throw new Exception('CoinGecko search endpoint not found', 404);
+                }
+
+                if ($response->failed()) {
+                    throw new Exception(
+                        'Failed to search cryptocurrencies: ' . $response->status(),
+                        $response->status()
+                    );
+                }
+
+                $data = $response->json();
+
+                // CoinGecko search returns coins, exchanges, etc.
+                // We only want coins for this application
+                return $data['coins'] ?? [];
+            } catch (RequestException $e) {
+                report($e);
+                throw new Exception('Network error while searching cryptocurrencies: ' . $e->getMessage(), 503);
             }
-
-            if ($response->failed()) {
-                throw new Exception(
-                    'Failed to search cryptocurrencies: ' . $response->status(),
-                    $response->status()
-                );
-            }
-
-            $data = $response->json();
-
-            // CoinGecko search returns coins, exchanges, etc.
-            // We only want coins for this application
-            return $data['coins'] ?? [];
-        } catch (RequestException $e) {
-            report($e);
-            throw new Exception('Network error while searching cryptocurrencies: ' . $e->getMessage(), 503);
-        }
+        });
     }
 }

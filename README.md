@@ -319,10 +319,20 @@ APP_ENV=local
 APP_DEBUG=true
 APP_URL=http://127.0.0.1:8000
 
+# Cache Configuration (using database for easy setup)
+CACHE_STORE=database
+
 # CoinGecko API (no key required for free tier)
 COINGECKO_BASE_URL=https://api.coingecko.com/api/v3
 COINGECKO_TIMEOUT=10
 ```
+
+**Cache Strategy:**
+- **Driver**: Database (SQLite) - no external dependencies required
+- **Top 10 List**: 2 minutes TTL
+- **Crypto Details**: 5 minutes TTL  
+- **Search Results**: 10 minutes TTL
+- **Benefit**: Prevents hitting CoinGecko's free tier rate limit (10-50 req/min)
 
 ### Frontend (.env)
 ```env
@@ -394,15 +404,28 @@ MIT License - Free for personal and commercial use
 
 ---
 
-## 🤝 Contributing
+## 🚀 Production Recommendations
 
-This is a technical assessment project. For production use, consider:
-- Adding authentication/authorization
-- Implementing caching (Redis)
-- Adding database layer for favorites
-- Implementing WebSocket for real-time updates
-- Adding more comprehensive logging
-- Setting up CI/CD pipeline
+This project is optimized for technical assessment. For production deployment, consider:
+
+### Infrastructure
+- **Cache**: Migrate from database to **Redis** for better performance and scalability
+- **Queue**: Implement **Redis Queue** or **SQS** for background jobs
+- **Database**: PostgreSQL or MySQL for production workloads
+- **CDN**: CloudFlare or AWS CloudFront for static assets
+
+### Features
+- **Authentication**: JWT or Laravel Sanctum for user sessions
+- **User Features**: Favorites, watchlists, price alerts
+- **Real-time**: WebSocket integration for live price updates
+- **Monitoring**: Sentry for error tracking, New Relic for APM
+- **CI/CD**: GitHub Actions or GitLab CI for automated testing and deployment
+
+### Security
+- **Rate Limiting**: Per-user limits with API keys
+- **HTTPS**: SSL/TLS certificates (Let's Encrypt)
+- **CORS**: Restrict to specific domains
+- **Input Validation**: Enhanced sanitization and validation rules
 
 ---
 
